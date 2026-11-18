@@ -3,8 +3,11 @@ import { notFound } from "next/navigation";
 import { HomeScreen } from "@/components/home/HomeScreen";
 import { SEASONS, SEASON_IDS, type SeasonId } from "@/lib/seasons";
 
-/** Preview the homepage in any season without shipping a change. Not for search engines. */
-export const dynamicParams = false;
+/**
+ * Preview the homepage in any season without shipping a change. Not for
+ * search engines. Unknown ids 404 below (no `dynamicParams = false`: on
+ * Netlify that 404'd the real ones too once a save marked pages stale).
+ */
 export const revalidate = 900;
 
 export const metadata: Metadata = {

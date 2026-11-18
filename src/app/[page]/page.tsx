@@ -6,8 +6,10 @@ import { SectionHeader } from "@/components/shop/Section";
 import { BackLink } from "@/components/ui/Buttons";
 import { INFO_PAGES, getInfoPage } from "@/lib/info";
 
-export const dynamicParams = false;
 
+// No `dynamicParams = false`: on Netlify it turned every info page into a
+// 404 once an editor save marked the pages stale (the page is rebuilt on its
+// next visit, and the runtime refused to). Unknown slugs still 404 below.
 export function generateStaticParams() {
   return INFO_PAGES.map((p) => ({ page: p.slug }));
 }
