@@ -1,0 +1,11 @@
+# Netlify picks up Next.js on its own (the OpenNext adapter); this pins the
+# build so a new machine builds the same way. Environment variables
+# (ADMIN_PASSWORD, ADMIN_SECRET, ORDERS_WEBHOOK_URL, SITE_URL) go in the
+# Netlify dashboard, never in this file. See DEPLOY.md.
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"

@@ -1,0 +1,462 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────
+   93+  ·  design tokens
+   Off-white ground, red ink, one gradient. Nothing else.
+   ───────────────────────────────────────────────────────────── */
+
+@theme {
+  --color-ground: #f0eae0; /* warm off-white — beige, not cream */
+  --color-surface: #ffffff; /* drawers, elevated panels */
+  --color-panel: #e3dbcd; /* image placeholders, skeletons */
+  /* One hue, three voices. Hierarchy can't come from size alone — the drop
+     from a 300px wordmark to 11px meta needs tone to bridge it. Saturation
+     does the work here, not lightness: ink-dim is actually *higher* contrast
+     than ink-mid (5.67 vs 4.86) but reads far quieter because it's half as
+     saturated. Quiet and legible at the same time. */
+  --color-ink: #9c1305; /* 7.00:1 · sat .97 — wordmark, titles, statements */
+  --color-ink-mid: #b0402b; /* 4.86:1 · sat .76 — prices, secondary copy */
+  --color-ink-dim: #7a5148; /* 5.67:1 · sat .41 — 11px meta, labels */
+  --color-hairline: rgba(156, 19, 5, 0.22);
+  /* mix-blend-difference computes |backdrop − source|, so for the header to
+     render as the brand red over the page its source colour has to be the
+     inverse: |ground − ink| = #54D7DB. It reads red on the page and flips
+     to light the moment a photograph passes under it. */
+  --color-header-invert: #54d7db;
+
+  --font-display: var(--font-neue-haas), "Helvetica Neue", Arial, sans-serif;
+
+  --aspect-shirt: 9 / 12;
+
+  /* easings — brand moments */
+  --ease-expo-out: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-expo-in-out: cubic-bezier(0.87, 0, 0.13, 1);
+  --ease-power3-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-dramatic: cubic-bezier(0.83, 0, 0.17, 1);
+  /* easings — functional UI */
+  --ease-out-quick: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Seasons — one switch changes the temperature of the whole site.
+   Layout, type, logo and the black/white base never move.
+   ───────────────────────────────────────────────────────────── */
+
+/* Summer Window is sampled straight off the hover photograph — its ground
+   runs #A71607 deep red through #D76821 bright orange. The other seasons
+   are the same ramp at a different temperature.
+   All five stops stay saturated: on an off-white page a pale end of a
+   gradient simply disappears into the paper. */
+:root,
+[data-season="summer-window"] {
+  --g-1: #9c1305;
+  --g-2: #b31909;
+  --g-3: #c64616;
+  --g-4: #d76821;
+  --g-5: #e28b42;
+}
+
+[data-season="european-nights"] {
+  --g-1: #101c6b;
+  --g-2: #1e3acf;
+  --g-3: #3b5be0;
+  --g-4: #5c7fea;
+  --g-5: #8aa6f2;
+}
+
+[data-season="the-run-in"] {
+  --g-1: #1f5e12;
+  --g-2: #3c8f16;
+  --g-3: #5fb021;
+  --g-4: #86c62e;
+  --g-5: #a8d64a;
+}
+
+[data-season="extra-time"] {
+  --g-1: #7a4a05;
+  --g-2: #a8700a;
+  --g-3: #ce9410;
+  --g-4: #e4b62c;
+  --g-5: #f0ce5b;
+}
+
+:root {
+  --gradient: linear-gradient(
+    90deg,
+    var(--g-1) 0%,
+    var(--g-2) 24%,
+    var(--g-3) 48%,
+    var(--g-4) 72%,
+    var(--g-5) 100%
+  );
+  --cursor-color: var(--g-1);
+  /* season colors cross-fade when the season flips */
+  transition: --g-1 600ms linear, --g-2 600ms linear, --g-3 600ms linear,
+    --g-4 600ms linear, --g-5 600ms linear;
+}
+
+@property --g-1 { syntax: "<color>"; inherits: true; initial-value: #9c1305; }
+@property --g-2 { syntax: "<color>"; inherits: true; initial-value: #b31909; }
+@property --g-3 { syntax: "<color>"; inherits: true; initial-value: #c64616; }
+@property --g-4 { syntax: "<color>"; inherits: true; initial-value: #d76821; }
+@property --g-5 { syntax: "<color>"; inherits: true; initial-value: #e28b42; }
+
+/* ─────────────────────────────────────────────────────────────
+   Base
+   ───────────────────────────────────────────────────────────── */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-ground);
+  color-scheme: light;
+}
+
+html,
+body {
+  font-synthesis-weight: none;
+}
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  overscroll-behavior-y: none;
+}
+
+a,
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background: var(--g-1);
+  color: var(--color-ground);
+}
+
+:is(a, input, button):focus-visible {
+  outline: 2px solid var(--g-3);
+  outline-offset: 3px;
+}
+
+/* Lenis */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-stopped {
+  overflow: clip;
+}
+
+/* Lenis only runs on mouse devices now, so the scroll lock it used to
+   provide (lenis-stopped) is done here for everyone: while the preloader
+   plays and while the cart drawer is open, the page behind stays put. */
+html.preloading,
+html.has-cart-open {
+  overflow: clip;
+}
+
+/* Masthead anchors glide on phones too. Lenis overrides this to `auto`
+   where it runs (it animates the jump itself), and the reduced-motion
+   block below leaves it out. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Type scale
+   Neue Haas *Display* is drawn for large sizes — anything under
+   ~14px gets positive tracking to stop it feeling cramped.
+   ───────────────────────────────────────────────────────────── */
+
+@utility t-display {
+  font-weight: 900;
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+}
+
+@utility t-statement {
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+@utility t-title {
+  font-weight: 500;
+  font-size: 1.125rem;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+@utility t-body {
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+@utility t-meta {
+  font-weight: 400;
+  font-size: 0.6875rem; /* 11px */
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+@utility t-label {
+  font-weight: 500;
+  font-size: 0.8125rem; /* 13px */
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Gradient surfaces
+   Allowed in exactly five places: the hero rule, the link
+   underline, the card hover flash, the cart progress bar and
+   the checkout button. It stops working if it's everywhere.
+   ───────────────────────────────────────────────────────────── */
+
+@utility gradient-fill {
+  background-image: var(--gradient);
+}
+
+/* The full ramp is a decorative surface — rules, underlines, progress.
+   Anything carrying a *label* uses this instead: the same gradient stopped
+   before it gets light enough to lose the text. White on the full ramp
+   falls to 2.3:1 at the pale end; across g-1→g-3 it holds at 4.9:1. */
+@utility gradient-fill-deep {
+  background-image: linear-gradient(
+    90deg,
+    var(--g-1) 0%,
+    var(--g-2) 55%,
+    var(--g-3) 100%
+  );
+  color: #fff;
+}
+
+@utility gradient-text {
+  background-image: var(--gradient);
+  background-clip: text;
+  color: transparent;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Link underline — sweeps in on the gradient
+   ───────────────────────────────────────────────────────────── */
+
+@utility link-hover {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -0.12em;
+    height: max(2px, 0.08em);
+    background-image: var(--gradient);
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    transition: transform 500ms var(--ease-dramatic);
+  }
+  &:hover::after,
+  &[data-selected]::after {
+    transform: scaleX(1);
+  }
+  &[data-selected]::after {
+    transition: none;
+  }
+}
+
+/* Header inverts itself against whatever scrolls beneath it. Paired with
+   --color-header-invert, which is pre-inverted so the blend resolves to the
+   brand red over the page and flips light over imagery. */
+@utility blend-difference {
+  mix-blend-mode: difference;
+}
+
+/* The link underline inside the header inherits that same blend, and a
+   red-orange ramp inverted against the page paints cyan through blue
+   (|ground − g-5| = #1066AC). currentColor is already pre-inverted, so it
+   resolves to exactly the red the type is showing. */
+#header .link-hover::after {
+  background-image: none;
+  background-color: currentColor;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Entrance — header + season marquee drop in once the
+   preloader hands over (html.loaded)
+   ───────────────────────────────────────────────────────────── */
+
+#header,
+#season-mark {
+  opacity: 0;
+  transform: translateY(-4rem);
+  transition: opacity 1.2s var(--ease-expo-out),
+    transform 1.2s var(--ease-expo-out);
+  transition-delay: 0.3s;
+  /* Fallback below runs on a delay and is normally beaten by `.loaded`. */
+  animation: entrance-bail 1s var(--ease-expo-out) 6.5s forwards;
+}
+
+html.loaded #header,
+html.loaded #season-mark,
+html[data-preloaded] #header,
+html[data-preloaded] #season-mark {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Failsafe: the shop must never be trapped behind the preloader
+
+   The preloader is server-rendered as a full-screen panel and everything
+   that clears it lives in JS. If the bundle never arrives — a blocked dev
+   chunk behind a tunnel, a failed deploy, an extension, a dropped network —
+   the page renders and then sits on a coloured screen forever. The GSAP
+   bail-out can't help, because it needs the very JS that failed.
+
+   These two animations are pure CSS and run no matter what. JS normally
+   hands over around 3s and beats them; when it doesn't, the shop still
+   appears. Both end on the same values the JS path produces, so on a
+   healthy load they're invisible.
+   ───────────────────────────────────────────────────────────── */
+
+@keyframes preloader-bail {
+  to {
+    clip-path: inset(0% 0% 100% 0%);
+    visibility: hidden;
+  }
+}
+
+@keyframes entrance-bail {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Returning visitor — set by the inline script before first paint. */
+html[data-preloaded] #preloader {
+  display: none;
+}
+
+#preloader {
+  animation: preloader-bail 900ms var(--ease-power3-in-out) 6.5s forwards;
+}
+
+/* The page recedes behind the cart drawer — cheap, and it makes the
+   drawer feel like it sits above the shop rather than beside it. */
+#page {
+  transition: transform 240ms var(--ease-out-quick),
+    opacity 240ms var(--ease-out-quick);
+  transform-origin: 50% 0;
+}
+
+html.has-cart-open #page {
+  transform: scale(0.98);
+  opacity: 0.75;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes pulse-panel {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@utility skeleton {
+  background: var(--color-panel);
+  animation: pulse-panel 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Card photo → product photo (PhotoLink sets the name on the tapped card;
+   ProductView's hero carries it). Browsers without the View Transitions API
+   get the cut they had before. */
+[data-hero-photo] {
+  view-transition-name: product-photo;
+}
+::view-transition-old(product-photo),
+::view-transition-new(product-photo) {
+  animation-duration: 380ms;
+  animation-timing-function: var(--ease-out-quick);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Champions League — European Nights blue, fixed whatever the season. */
+@utility gradient-ucl {
+  background-image: linear-gradient(125deg, #0b1452 0%, #101c6b 30%, #1e3acf 75%, #3b5be0 100%);
+}
+
+/* Order confirmed — the one green moment on the site. Good news should look
+   like good news. Same ramp as the Run-In season, held on its deeper half so
+   white type stays legible. */
+@utility gradient-win {
+  background-image: linear-gradient(135deg, #17470d 0%, #2f7a12 45%, #46a01b 80%, #5fb021 100%);
+}
+
+/* A light band sweeps across the green every few seconds. */
+.win-shine {
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.28) 50%, transparent 65%);
+  background-size: 250% 100%;
+  animation: win-shine 3.2s var(--ease-power3-in-out) 0.6s infinite;
+}
+
+@keyframes win-shine {
+  from {
+    background-position: 130% 0;
+  }
+  60%,
+  to {
+    background-position: -30% 0;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Shop editor (/admin) — sheets slide, dialogs and toasts pop
+   ───────────────────────────────────────────────────────────── */
+
+@keyframes admin-fade {
+  from { opacity: 0; }
+}
+@keyframes admin-slide {
+  from { transform: translateX(32px); opacity: 0; }
+}
+@keyframes admin-pop {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+}
+.admin-fade { animation: admin-fade 200ms ease-out; }
+.admin-slide { animation: admin-slide 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+.admin-pop { animation: admin-pop 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .admin-fade, .admin-slide, .admin-pop { animation: none; }
+}
