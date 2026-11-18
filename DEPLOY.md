@@ -85,7 +85,14 @@ HTTPS turns on by itself once the DNS is seen (minutes to an hour). Then set
   other people's commits on public repos). hadi-music can push.
 - Netlify: Dana's account, team "93 Plus", project `93plus` →
   https://93plus.netlify.app. Every push to `main` deploys in about a minute.
-- `ADMIN_PASSWORD` is set in Netlify (Production). New Netlify projects start
-  **private** (only Dana's Netlify login can open them) until "Make public".
+- `ADMIN_PASSWORD` is set in Netlify (Production); `SITE_URL=https://93plus.net`.
+- Public since Nov 18. Domain **93plus.net**, registered on Cloudflare (Hadi's
+  account), DNS at Cloudflare, both records **DNS only** (grey cloud — the
+  orange proxy breaks Netlify's certificate):
+  `93plus.net CNAME apex-loadbalancer.netlify.com`, `www CNAME 93plus.netlify.app`.
+  Let's Encrypt certificate covers both, renewed by Netlify; www and http
+  redirect to https://93plus.net.
+- The "Powered by Netlify" badge: Project configuration → General → Powered by
+  Netlify badge. Free plan can't hide it; paid plans can.
 - Netlify Blobs is spoken to directly from `src/lib/store.ts`: the
   `@netlify/blobs` v11 client hung on every call inside the Next.js server.
