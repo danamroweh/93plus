@@ -45,10 +45,9 @@ const jersey = localFont({
 });
 
 export const metadata: Metadata = {
-  // Absolute base for the share image. SITE_URL overrides it for a
-  // preview deploy (the ngrok demo link) — otherwise previews would point
-  // at a domain that isn't live yet.
-  metadataBase: new URL(process.env.SITE_URL ?? "https://93plus.shop"),
+  // Absolute base for the share image: SITE_URL (the real domain, once it's
+  // set), else the address Netlify gives the site (URL), else a placeholder.
+  metadataBase: new URL(process.env.SITE_URL || process.env.URL || "https://93plus.shop"),
   title: {
     default: "93+ — Ninety minutes is a suggestion.",
     template: "%s | 93+",
