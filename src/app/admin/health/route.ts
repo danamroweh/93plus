@@ -38,6 +38,22 @@ export async function GET() {
   await timed("pingPatched", out, async () => (await fetch("https://www.google.com/generate_204", { cache: "no-store" })).status);
   if (original) await timed("pingOriginal", out, async () => (await original("https://www.google.com/generate_204")).status);
 
+  // One raw request, no retries: what the store server actually answers.
+  try {
+    const ctx = JSON.parse(Buffer.from(process.env.NETLIFY_BLOBS_CONTEXT ?? "", "base64").toString("utf8")) as Record<string, string>;
+    for (const [label, base] of [["rawEdge", ctx.edgeURL], ["rawUncached", ctx.uncachedEdgeURL]] as const) {
+      if (!base) continue;
+      await timed(label, out, async () => {
+        const res = await (original ?? fetch)(new URL(`/${ctx.siteID}/site:93plus/catalogue.json`, base).toString(), {
+          headers: { authorization: `Bearer ${ctx.token}` },
+        });
+        const body = (await res.text()).slice(0, 160);
+        return { status: res.status, nfError: res.headers.get("x-nf-error"), body };
+      });
+    }
+  } catch (e) {
+    out.raw = String(e).slice(0, 120);
+  }
   const { getStore } = await import("@netlify/blobs");
   await timed("blobsPatched", out, async () => ((await getStore({ name: "93plus" }).get("catalogue.json")) === null ? "missing" : "found"));
   if (original)
