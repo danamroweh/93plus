@@ -10,8 +10,9 @@ import path from "node:path";
  *
  *   file     a folder on disk (`.data/`, or DATA_DIR). This Mac, or any
  *            server that keeps its disk between restarts.
- *   netlify  Netlify Blobs. Picked automatically on Netlify, where the disk
- *            a function runs on is read-only and thrown away.
+ *   netlify  Netlify Blobs (spoken to directly, see below). Picked
+ *            automatically on Netlify, where the disk a function runs on is
+ *            read-only and thrown away.
  *
  * STORE=file|netlify forces one. Keys look like paths: `catalogue.json`,
  * `media/k3x9….webp`, `orders/93-1118-4821.json`.
@@ -35,7 +36,9 @@ interface Backend {
 // ── files ─────────────────────────────────────────────────────────────
 
 function fileBackend(): Backend {
-  const root = path.resolve(process.env.DATA_DIR || path.join(process.cwd(), ".data"));
+  // turbopackIgnore: the data folder is read at runtime only; without the
+  // hint the build traces the whole project into the server bundle.
+  const root = path.resolve(/*turbopackIgnore: true*/ process.env.DATA_DIR || path.join(process.cwd(), ".data"));
   const full = (key: string) => {
     const p = path.resolve(root, key);
     if (!p.startsWith(root + path.sep)) throw new Error(`Bad key: ${key}`);
@@ -58,7 +61,7 @@ function fileBackend(): Backend {
     kind: "file",
     async read(key) {
       try {
-        const data = await readFile(full(key));
+        const data = await readFile(/*turbopackIgnore: true*/ full(key));
         return { data, type: types[path.extname(key)] ?? "application/octet-stream" };
       } catch {
         return null;
@@ -69,7 +72,7 @@ function fileBackend(): Backend {
     },
     async readJSON<T>(key: string) {
       try {
-        return { value: JSON.parse(await readFile(full(key), "utf8")) as T, etag: null };
+        return { value: JSON.parse(await readFile(/*turbopackIgnore: true*/ full(key), "utf8")) as T, etag: null };
       } catch {
         return null;
       }
@@ -87,41 +90,104 @@ function fileBackend(): Backend {
 }
 
 // ── Netlify Blobs ─────────────────────────────────────────────────────
+//
+// Spoken to directly rather than through @netlify/blobs: v11 of that client
+// wraps every call in a tracing layer that never resolves inside Netlify's
+// Next.js server (every read hung until the 30 s function limit, Nov 18
+// 2026), while the same HTTP request made by hand answers in ~25 ms. The
+// protocol is small: GET / PUT / DELETE on
+// `<edge>/<siteID>/site:<store>/<key>` with the site's token, the content
+// type kept in the object's metadata header, ETags for conditional writes.
+// Netlify hands every function the URLs and token in NETLIFY_BLOBS_CONTEXT.
+
+type BlobsContext = { siteID: string; token: string; edgeURL: string; uncachedEdgeURL?: string };
 
 function netlifyBackend(): Backend {
-  // Loaded lazily so the file backend never pulls the client in.
-  const store = import("@netlify/blobs").then(({ getStore }) =>
-    getStore({ name: "93plus", consistency: "strong" }),
-  );
+  const STORE = "site:93plus";
+  const META = "x-amz-meta-user";
+  let ctx: BlobsContext | null = null;
+  const context = () => {
+    if (ctx) return ctx;
+    const raw = process.env.NETLIFY_BLOBS_CONTEXT;
+    if (!raw) throw new Error("Netlify Blobs: NETLIFY_BLOBS_CONTEXT is missing (not running on Netlify?)");
+    ctx = JSON.parse(Buffer.from(raw, "base64").toString("utf8")) as BlobsContext;
+    return ctx;
+  };
+  // Next.js wraps fetch to cache and track it; a store read inside a page
+  // render must not be mistaken for a page-level fetch, so use the original.
+  const rawFetch: typeof fetch =
+    (globalThis.fetch as typeof fetch & { _nextOriginalFetch?: typeof fetch })._nextOriginalFetch ?? fetch;
+
+  /** Strong reads skip the edge cache, so an edit is read back at once. */
+  async function call(method: string, key: string, init: { body?: Buffer | string; headers?: Record<string, string>; strong?: boolean } = {}) {
+    const c = context();
+    const base = init.strong && c.uncachedEdgeURL ? c.uncachedEdgeURL : c.edgeURL;
+    const url = new URL(`/${c.siteID}/${STORE}/${key}`, base).toString();
+    for (let attempt = 0; ; attempt++) {
+      const res = await rawFetch(url, {
+        method,
+        body: init.body as BodyInit | undefined,
+        headers: { authorization: `Bearer ${c.token}`, ...init.headers },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if ((res.status === 429 || res.status >= 500) && attempt < 2) {
+        await res.body?.cancel();
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+        continue;
+      }
+      return res;
+    }
+  }
+
+  const fail = async (res: Response, what: string) => {
+    const detail = res.headers.get("x-nf-error") ?? (await res.text().catch(() => "")).slice(0, 120);
+    return new Error(`Netlify Blobs ${what}: ${res.status} ${detail}`);
+  };
+  const meta = (type: string) => `b64;${Buffer.from(JSON.stringify({ type })).toString("base64")}`;
+  const typeOf = (res: Response) => {
+    const h = res.headers.get(META) ?? res.headers.get("netlify-blobs-metadata") ?? "";
+    try {
+      return h.startsWith("b64;") ? String(JSON.parse(Buffer.from(h.slice(4), "base64").toString("utf8")).type ?? "") : "";
+    } catch {
+      return "";
+    }
+  };
+  const put = (key: string, body: Buffer | string, type: string, extra: Record<string, string> = {}) =>
+    call("PUT", key, {
+      body,
+      headers: { "cache-control": "max-age=0, stale-while-revalidate=60", [META]: meta(type), ...extra },
+    });
+
   return {
     kind: "netlify",
     async read(key) {
-      const hit = await (await store).getWithMetadata(key, { type: "arrayBuffer" });
-      if (!hit) return null;
-      const type = String(hit.metadata?.type ?? "application/octet-stream");
-      return { data: Buffer.from(hit.data), type };
+      // Media never changes under a name, so the cached edge is right here.
+      const res = await call("GET", key);
+      if (res.status === 404) return null;
+      if (!res.ok) throw await fail(res, `read ${key}`);
+      return { data: Buffer.from(await res.arrayBuffer()), type: typeOf(res) || "application/octet-stream" };
     },
     async write(key, data, type) {
-      const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-      await (await store).set(key, bytes as ArrayBuffer, { metadata: { type } });
+      const res = await put(key, data, type);
+      if (!res.ok) throw await fail(res, `write ${key}`);
     },
     async readJSON<T>(key: string) {
-      const hit = await (await store).getWithMetadata(key, { type: "json" });
-      return hit ? { value: hit.data as T, etag: hit.etag ?? null } : null;
+      const res = await call("GET", key, { strong: true });
+      if (res.status === 404) return null;
+      if (!res.ok) throw await fail(res, `read ${key}`);
+      return { value: JSON.parse(await res.text()) as T, etag: res.headers.get("etag") };
     },
     async writeJSON(key, value, etag) {
-      const s = await store;
-      if (etag === undefined) {
-        await s.setJSON(key, value);
-        return true;
-      }
-      const res = etag === null
-        ? await s.setJSON(key, value, { onlyIfNew: true })
-        : await s.setJSON(key, value, { onlyIfMatch: etag });
-      return res.modified;
+      const condition: Record<string, string> =
+        etag === undefined ? {} : etag === null ? { "if-none-match": "*" } : { "if-match": etag };
+      const res = await put(key, JSON.stringify(value), "application/json", condition);
+      if (res.status === 412 || res.status === 409) return false;
+      if (!res.ok) throw await fail(res, `write ${key}`);
+      return true;
     },
     async remove(key) {
-      await (await store).delete(key);
+      const res = await call("DELETE", key);
+      if (!res.ok && res.status !== 404) throw await fail(res, `delete ${key}`);
     },
   };
 }
