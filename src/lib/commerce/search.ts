@@ -9,11 +9,9 @@
  * ("barca", "juve"), its league, its kit type and what kind of thing it is.
  */
 
-import { CATEGORIES, TEAM_ALIASES } from "./catalogue";
+import { TEAM_ALIASES } from "./catalogue";
 import type { Product, SearchItem } from "./types";
 import { formatPrice, normalise } from "@/lib/utils";
-
-const CATEGORY_TITLES = new Map(CATEGORIES);
 
 /** How the players are typed in Arabic. Keyed by the preset name in the catalogue. */
 const PLAYERS_AR: Record<string, string[]> = {
@@ -51,8 +49,10 @@ export function searchIndex(
   products: Product[],
   teams: Record<string, string>,
   leagues: { title: string; teams: string[] }[],
+  categories: [handle: string, title: string][],
 ): SearchItem[] {
   const aliases = TEAM_ALIASES as Record<string, string[]>;
+  const CATEGORY_TITLES = new Map(categories);
   return products.map((p) => {
     const words = [p.title, p.category, p.set ?? ""];
     for (const handle of p.collections ?? []) {

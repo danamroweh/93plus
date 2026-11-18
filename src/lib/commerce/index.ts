@@ -12,7 +12,7 @@
 
 import { mockAdapter } from "./mock";
 import { shopifyAdapter } from "./shopify";
-import { leaguesOf, loadDoc, teamsOf } from "./inventory";
+import { categoriesOf, leaguesOf, loadDoc, teamsOf } from "./inventory";
 import { rankBestSellers } from "./bestsellers";
 import { searchIndex } from "./search";
 import type { CommerceAdapter, League } from "./types";
@@ -54,7 +54,7 @@ export async function getLeagues(): Promise<League[]> {
 
 export async function getSearchIndex() {
   const [products, doc] = await Promise.all([adapter.getProducts(), loadDoc()]);
-  return searchIndex(products, teamsOf(doc), leaguesOf(doc));
+  return searchIndex(products, teamsOf(doc), leaguesOf(doc), categoriesOf(doc));
 }
 
 export * from "./types";

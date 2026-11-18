@@ -1,5 +1,6 @@
 import type { Item, Kit } from "@/lib/commerce/catalogue";
 import type { Stock } from "@/lib/commerce/inventory";
+import type { Order, OrderState } from "@/lib/commerce/orders";
 import type { ImageRole } from "@/lib/commerce/types";
 
 /**
@@ -7,7 +8,12 @@ import type { ImageRole } from "@/lib/commerce/types";
  * browser; the server turns it back into catalogue entries (app/admin/actions.ts).
  */
 
-export type { Stock };
+export type { Stock, OrderState };
+
+/** An order as the editor shows it. */
+export type AdminOrder = Order;
+
+export const ORDER_STEPS: OrderState[] = ["New", "Confirmed", "Paid", "Out for delivery", "Delivered"];
 
 export type AdminPhoto = {
   /** Stored path — `/product/<handle>/<file>` or `/media/<id>.webp`. */
@@ -36,6 +42,10 @@ export type AdminProduct = {
   hidden: boolean;
   deleted: string | null;
   photos: AdminPhoto[];
+  /** Category handles it's in, set by hand. null: worked out from its type and team. */
+  categories: string[] | null;
+  /** A Champions League edition in the code list. */
+  ucl: boolean;
   createdAt: string | null;
   /** Built in code (it can't be renamed to a new address). */
   fromCode: boolean;
@@ -48,12 +58,19 @@ export type AdminTeam = {
   /** Other names it's searched by — "barca", "juve", "ريال". */
   aliases?: string[];
 };
-export type AdminLeague = { handle: string; title: string };
+export type AdminLeague = { handle: string; title: string; custom: boolean };
+export type AdminCategory = { handle: string; title: string; custom: boolean };
+
+/** How a product's categories are worked out when they aren't set by hand. */
+export type CategoryRules = { kitCategory: Record<Kit, string>; uclTeams: string[]; ucl: string };
 
 export type AdminSnapshot = {
   products: AdminProduct[];
   teams: AdminTeam[];
   leagues: AdminLeague[];
+  categories: AdminCategory[];
+  rules: CategoryRules;
+  orders: AdminOrder[];
   /** Name + number printing, cents. */
   printing: number;
   /** "26/27" — for naming new kits. */
@@ -79,6 +96,8 @@ export type ProductInput = {
   stock: Stock;
   hidden: boolean;
   photos: { url: string; role?: ImageRole }[];
+  /** null: follow the type. */
+  categories: string[] | null;
 };
 
 export const KITS: Kit[] = ["Home", "Away", "Third", "Retro", "Long sleeve", "Tracksuit"];
@@ -104,4 +123,16 @@ export function soldOut(p: Pick<AdminProduct, "stock" | "kind" | "kit">): boolea
   const keys = stockKeysFor(p.kind, p.kit);
   if (p.stock.track) return keys.every((k) => !(p.stock.track && p.stock.qty[k] > 0));
   return keys.every((k) => !p.stock.track && (p.stock.off ?? []).includes(k));
+}
+
+/** The categories a product gets from its type and team, mirroring the shop. */
+export function autoCategories(
+  p: { kind: "shirt" | "printable"; kit: Kit | null; team: string | null; ucl?: boolean },
+  rules: CategoryRules,
+): string[] {
+  if (p.kind === "printable") return ["accessories"];
+  const kit = p.kit ?? "Home";
+  const out = [rules.kitCategory[kit]];
+  if (p.ucl || (p.team && rules.uclTeams.includes(p.team) && kit !== "Tracksuit")) out.push(rules.ucl);
+  return out;
 }

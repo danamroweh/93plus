@@ -1,10 +1,15 @@
 "use server";
 
-import { LEAGUES, PRICES, type Item, type Kit } from "@/lib/commerce/catalogue";
+import { PRICES, type Item, type Kit } from "@/lib/commerce/catalogue";
 import {
   CODE_HANDLES,
+  categoriesFor,
+  categoriesOf,
   codeEntry,
   entriesOf,
+  leaguesOf,
+  returnStock,
+  takeStock,
   hasVersions,
   loadDoc,
   mutate,
@@ -18,6 +23,7 @@ import {
 import { isShootPhoto, shootPhotos } from "@/lib/commerce/photos";
 import { refreshShop } from "@/lib/commerce/refresh";
 import { readJSON } from "@/lib/store";
+import { ORDER_STATES, changeOrder, listOrders, type Order, type OrderState } from "@/lib/commerce/orders";
 import { isAdmin, signIn, signOut, type SignInResult } from "@/lib/admin/session";
 import { effectivePrices, snapshotOf, toAdmin } from "@/lib/admin/data";
 import { ITEMS, KITS, type AdminProduct, type AdminSnapshot, type AdminTeam, type ProductInput } from "@/lib/admin/types";
@@ -42,7 +48,8 @@ export async function signOutAction() {
 
 export async function snapshotAction(): Promise<AdminSnapshot | null> {
   if (!(await isAdmin())) return null;
-  return snapshotOf(await loadDoc());
+  const [doc, orders] = await Promise.all([loadDoc(), listOrders().catch(() => [])]);
+  return snapshotOf(doc, orders);
 }
 
 // ── checking what the page sent ───────────────────────────────────────
@@ -143,6 +150,15 @@ export async function saveProductAction(input: ProductInput): Promise<SaveResult
   const doc = await loadDoc();
   const team = input.team && input.team in teamsOf(doc) ? input.team : null;
   const hidden = Boolean(input.hidden);
+  // Categories by hand, or null to follow the type. A hand-picked set that
+  // matches what the type gives is stored as "follow the type".
+  const known = new Set(categoriesOf(doc).map(([h]) => h));
+  const picked = Array.isArray(input.categories)
+    ? [...new Set(input.categories.filter((h): h is string => typeof h === "string" && known.has(h)))]
+    : null;
+  const existing = entriesOf(doc).find((e) => e.handle === input.handle);
+  const auto = categoriesFor({ kind, kit: kit ?? undefined, team: team ?? undefined, ucl: existing?.ucl });
+  const categories = picked && !same([...picked].sort(), [...auto].sort()) ? picked : undefined;
   const now = new Date().toISOString();
 
   // The editable fields, as they should now be.
@@ -159,6 +175,7 @@ export async function saveProductAction(input: ProductInput): Promise<SaveResult
     stock,
     hidden,
     photos,
+    categories,
   };
 
   let handle: string;
@@ -219,6 +236,7 @@ function normaliseField(k: keyof Entry, v: unknown) {
   }
   if (k === "photos") return ((v ?? []) as StoredPhoto[]).map((p) => [p.url, p.role ?? null]);
   if (k === "hidden") return Boolean(v);
+  if (k === "categories") return v ? [...(v as string[])].sort() : null;
   return v ?? null;
 }
 
@@ -277,15 +295,125 @@ export async function addTeamAction(
   if (!(await isAdmin())) return SIGNED_OUT;
   const name = text(title, 40);
   if (name.length < 2) return { ok: false, error: "Type the team's name." };
-  if (!LEAGUES.some((l) => l.handle === league)) return { ok: false, error: "Pick a league." };
   const doc = await loadDoc();
+  if (!leaguesOf(doc).some((l) => l.handle === league)) return { ok: false, error: "Pick a league." };
   const names = teamsOf(doc);
   if (Object.values(names).some((t) => t.toLowerCase() === name.toLowerCase()))
     return { ok: false, error: `${name} is already in the list.` };
-  const handle = freeHandle(slug(name), new Set(Object.keys(names)));
+  const handle = freeHandle(slug(name), takenCollections(doc));
   await mutate((d) => {
     d.teams[handle] = { title: name, league };
   });
   // No refresh: a team shows in the shop once it has a product.
   return { ok: true, team: { handle, title: name, league } };
+}
+
+/** Teams and categories share /collection/<handle>, so a new one can't take either's name. */
+function takenCollections(doc: Doc) {
+  return new Set([...Object.keys(teamsOf(doc)), ...categoriesOf(doc).map(([h]) => h)]);
+}
+
+// ── categories and leagues ────────────────────────────────────────────
+
+export async function addCategoryAction(
+  title: string,
+): Promise<{ ok: true; category: { handle: string; title: string; custom: true } } | Fail> {
+  if (!(await isAdmin())) return SIGNED_OUT;
+  const name = text(title, 40);
+  if (name.length < 2) return { ok: false, error: "Type the category's name." };
+  const doc = await loadDoc();
+  if (categoriesOf(doc).some(([, t]) => t.toLowerCase() === name.toLowerCase()))
+    return { ok: false, error: `${name} is already a category.` };
+  const handle = freeHandle(slug(name), takenCollections(doc));
+  await mutate((d) => {
+    d.categories[handle] = { title: name };
+  });
+  refreshShop();
+  return { ok: true, category: { handle, title: name, custom: true } };
+}
+
+export async function removeCategoryAction(handle: string): Promise<{ ok: true } | Fail> {
+  if (!(await isAdmin())) return SIGNED_OUT;
+  await mutate((d) => {
+    if (!d.categories[handle]) return;
+    delete d.categories[handle];
+    // Products that listed it simply stop listing it.
+    for (const p of Object.values(d.products))
+      if (p.categories?.includes(handle)) p.categories = p.categories.filter((h) => h !== handle);
+  });
+  refreshShop();
+  return { ok: true };
+}
+
+export async function addLeagueAction(
+  title: string,
+): Promise<{ ok: true; league: { handle: string; title: string; custom: true } } | Fail> {
+  if (!(await isAdmin())) return SIGNED_OUT;
+  const name = text(title, 40);
+  if (name.length < 2) return { ok: false, error: "Type the league's name." };
+  const doc = await loadDoc();
+  const leagues = leaguesOf(doc);
+  if (leagues.some((l) => l.title.toLowerCase() === name.toLowerCase()))
+    return { ok: false, error: `${name} is already a league.` };
+  const handle = freeHandle(slug(name), new Set(leagues.map((l) => l.handle)));
+  await mutate((d) => {
+    d.leagues[handle] = { title: name };
+  });
+  return { ok: true, league: { handle, title: name, custom: true } };
+}
+
+export async function moveTeamAction(team: string, league: string): Promise<{ ok: true } | Fail> {
+  if (!(await isAdmin())) return SIGNED_OUT;
+  const doc = await loadDoc();
+  const names = teamsOf(doc);
+  if (!(team in names)) return { ok: false, error: "That team isn't there any more." };
+  if (!leaguesOf(doc).some((l) => l.handle === league)) return { ok: false, error: "Pick a league." };
+  await mutate((d) => {
+    d.teams[team] = { title: names[team], league };
+  });
+  refreshShop();
+  return { ok: true };
+}
+
+// ── orders ────────────────────────────────────────────────────────────
+
+export async function ordersAction(): Promise<Order[] | null> {
+  if (!(await isAdmin())) return null;
+  return listOrders();
+}
+
+/**
+ * Moves an order to a status. Cancelling puts counted stock back; taking an
+ * order out of Cancelled takes it again.
+ */
+export async function setOrderStatusAction(
+  number: string,
+  status: OrderState,
+): Promise<{ ok: true; order: Order } | Fail> {
+  if (!(await isAdmin())) return SIGNED_OUT;
+  if (!ORDER_STATES.includes(status)) return { ok: false, error: "Pick a status." };
+  let restock: "back" | "take" | null = null;
+  const saved = await changeOrder(String(number), (o) => {
+    const was = o.status ?? "New";
+    if (was === status) return;
+    o.status = status;
+    o.history = [...(o.history ?? []), { status, at: new Date().toISOString() }];
+    if (status === "Cancelled" && !o.restocked) {
+      restock = "back";
+      o.restocked = true;
+    } else if (was === "Cancelled" && o.restocked) {
+      restock = "take";
+      o.restocked = false;
+    }
+  });
+  if (!saved) return { ok: false, error: "That order isn't there any more. Reload the page." };
+  const order: Order = saved;
+  const takes = (order.lines ?? []).map((l) => ({ handle: l.handle, key: l.key, quantity: l.quantity, title: l.title, label: "" }));
+  try {
+    if (restock === "back" && (await returnStock(takes))) refreshShop();
+    if (restock === "take" && (await takeStock(takes))) refreshShop();
+  } catch (err) {
+    console.error(`[orders] ${number}: status saved, stock not updated`, err);
+  }
+  return { ok: true, order };
 }

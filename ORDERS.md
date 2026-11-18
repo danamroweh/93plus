@@ -1,3 +1,8 @@
+> **Nov 18 2026:** orders now live in the shop editor (`/admin` → Orders):
+> statuses, Call / WhatsApp, cancel with stock returned. The customer's
+> tracking page reads the editor's status. The Google Sheet below is optional
+> — set it up only if you also want each new order copied into a spreadsheet.
+
 # Orders → Google Sheet
 
 Checkout on the site is one form in the cart drawer. Each order becomes one

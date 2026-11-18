@@ -3,26 +3,30 @@
 import { useMemo, useRef, useState } from "react";
 import type { Item, Kit } from "@/lib/commerce/catalogue";
 import {
+  autoCategories,
   hasVersions,
+  type AdminCategory,
   type AdminProduct,
   type AdminSnapshot,
   type AdminTeam,
   type ProductInput,
   type Stock,
 } from "@/lib/admin/types";
-import { addTeamAction, deleteProductAction, saveProductAction } from "@/app/admin/actions";
+import { addCategoryAction, addTeamAction, deleteProductAction, saveProductAction } from "@/app/admin/actions";
 import { cn } from "@/lib/utils";
 import {
   Button,
   Dialog,
   IconAlert,
   IconButton,
+  IconCheck,
   IconClose,
   IconKeychain,
   IconLongSleeve,
   IconMug,
   IconOut,
   IconPillow,
+  IconPlus,
   IconRetro,
   IconShirt,
   IconTracksuit,
@@ -64,6 +68,8 @@ type Draft = {
   stock: Stock;
   hidden: boolean;
   slots: Slots;
+  /** null: follow the type. */
+  categories: string[] | null;
 };
 
 const typeOf = (d: Pick<Draft, "kind" | "kit" | "item">): TypeId =>
@@ -83,6 +89,7 @@ function draftOf(p: AdminProduct): Draft {
     stock: p.stock,
     hidden: p.hidden,
     slots: toSlots(p.photos),
+    categories: p.categories,
   };
 }
 
@@ -100,6 +107,7 @@ function blankDraft(data: AdminSnapshot): Draft {
     stock: { track: false },
     hidden: false,
     slots: { front: null, back: null, hover: null, more: [] },
+    categories: null,
   };
 }
 
@@ -125,6 +133,7 @@ export function ProductSheet({
   onSaved,
   onDeleted,
   onTeamAdded,
+  onCategoryAdded,
 }: {
   product: AdminProduct | null;
   data: AdminSnapshot;
@@ -132,6 +141,7 @@ export function ProductSheet({
   onSaved: (p: AdminProduct, isNew: boolean) => void;
   onDeleted: (p: AdminProduct) => void;
   onTeamAdded: (t: AdminTeam) => void;
+  onCategoryAdded: (c: AdminCategory) => void;
 }) {
   const isNew = !product;
   const initial = useMemo(() => (product ? draftOf(product) : blankDraft(data)), [product, data]);
@@ -141,7 +151,7 @@ export function ProductSheet({
   const [uploads, setUploads] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ask, setAsk] = useState<null | "delete" | "leave" | "team">(null);
+  const [ask, setAsk] = useState<null | "delete" | "leave" | "team" | "category">(null);
   const [showMore, setShowMore] = useState(isNew);
 
   const originalFront = initial.slots.front?.url ?? null;
@@ -150,6 +160,7 @@ export function ProductSheet({
 
   // A team added from this sheet names the product before the page's list catches up.
   const addedTeams = useRef<AdminTeam[]>([]);
+  const [addedCategories, setAddedCategories] = useState<AdminCategory[]>([]);
 
   const set = (patch: Partial<Draft>) => {
     setError(null);
@@ -222,6 +233,7 @@ export function ProductSheet({
       stock: draft.stock,
       hidden: draft.hidden,
       photos: fromSlots(draft.slots, originalFront).map(({ url, role }) => ({ url, ...(role && { role }) })),
+      categories: draft.categories,
     };
     try {
       const res = await saveProductAction(input);
@@ -257,6 +269,19 @@ export function ProductSheet({
       : draft.kit === "Retro"
         ? "Name & number printing is included."
         : `Name & number printing adds ${money(data.printing)}.`;
+
+  const allCategories = [
+    ...data.categories,
+    ...addedCategories.filter((c) => !data.categories.some((x) => x.handle === c.handle)),
+  ];
+  const shownIn = draft.categories ?? autoCategories({ ...draft, ucl: product?.ucl }, data.rules);
+  const teamInfo = data.teams.find((t) => t.handle === draft.team);
+  const leagueTitle = data.leagues.find((l) => l.handle === teamInfo?.league)?.title;
+  const leagueLine = !draft.team
+    ? "No team — it won't have a team page."
+    : leagueTitle
+      ? `On the ${teamInfo?.title} page, in ${leagueTitle}.`
+      : `On the ${teamInfo?.title} page. The team isn't in a league yet (⋯ → Categories & leagues).`;
 
   const teamSelect = (
     <TeamSelect
@@ -428,22 +453,78 @@ export function ProductSheet({
             )}
 
             <section>
+              <Label
+                aside={
+                  draft.categories && (
+                    <button
+                      type="button"
+                      onClick={() => set({ categories: null })}
+                      className="underline-offset-4 hover:text-ink hover:underline"
+                    >
+                      Match the type again
+                    </button>
+                  )
+                }
+              >
+                Where it shows in the shop
+              </Label>
+              {!isNew && (
+                <div className="mb-5">
+                  {teamSelect}
+                  <p className="mt-2 text-[14px] text-ink-dim">{leagueLine}</p>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {allCategories.map((c) => {
+                  const on = shownIn.includes(c.handle);
+                  return (
+                    <button
+                      key={c.handle}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        set({ categories: on ? shownIn.filter((h) => h !== c.handle) : [...shownIn, c.handle] })
+                      }
+                      className={cn(
+                        "flex h-11 items-center gap-2 border px-4 text-[15px] font-medium transition-colors",
+                        on ? "border-ink bg-ink text-ground" : "border-ink/25 bg-surface text-ink hover:border-ink",
+                      )}
+                    >
+                      {on && <IconCheck className="h-4 w-4" />}
+                      {c.title}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setAsk("category")}
+                  className="flex h-11 items-center gap-2 border border-dashed border-ink/35 px-4 text-[15px] font-medium text-ink hover:border-ink"
+                >
+                  <IconPlus className="h-4 w-4" /> New category
+                </button>
+              </div>
+              <p className="mt-3 text-[14px] text-ink-dim">
+                {shownIn.length
+                  ? draft.categories
+                    ? "Picked by hand. Tap to add or take away."
+                    : "Picked from its type. Tap to change."
+                  : "In no category — it only shows on its team page and in search."}
+              </p>
+            </section>
+
+            <section>
               {!showMore ? (
                 <button
                   type="button"
                   onClick={() => setShowMore(true)}
                   className="h-12 text-[14px] font-medium uppercase tracking-[0.04em] text-ink-dim underline-offset-4 hover:text-ink hover:underline"
                 >
-                  More details — team, type, description
+                  More details — type, description
                 </button>
               ) : (
                 <div className="space-y-8">
                   {!isNew && (
                     <div className="grid gap-6 sm:grid-cols-2">
-                      <div>
-                        <Label>Team</Label>
-                        {teamSelect}
-                      </div>
                       <div>
                         <Label>Type</Label>
                         <select
@@ -570,6 +651,18 @@ export function ProductSheet({
         >
           {isNew ? "What you've filled in will be lost." : "You changed this product but haven't saved it."}
         </Dialog>
+      )}
+
+      {ask === "category" && (
+        <NewCategory
+          onClose={() => setAsk(null)}
+          onAdded={(c) => {
+            setAddedCategories((list) => [...list, c]);
+            onCategoryAdded(c);
+            setAsk(null);
+            set({ categories: [...shownIn, c.handle] });
+          }}
+        />
       )}
 
       {ask === "team" && (
@@ -714,6 +807,57 @@ function NewTeam({
             </option>
           ))}
         </select>
+        {error && <p className="text-[15px] font-medium text-ink">{error}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+function NewCategory({ onClose, onAdded }: { onClose: () => void; onAdded: (c: AdminCategory) => void }) {
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  async function add() {
+    setSaving(true);
+    try {
+      const res = await addCategoryAction(title);
+      if (res.ok) onAdded(res.category);
+      else setError(res.error);
+    } catch {
+      setError("Couldn't add it. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <Dialog
+      title="Add a new category"
+      onClose={onClose}
+      actions={
+        <>
+          <Button tone="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button tone="primary" onClick={add} disabled={saving || title.trim().length < 2}>
+            {saving && <Spinner />} Add category
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-ink">
+        <input
+          autoFocus
+          className={inputClass}
+          placeholder="e.g. World Cup 2026, Kids, Sale"
+          value={title}
+          maxLength={40}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && title.trim().length >= 2 && void add()}
+        />
+        <p className="text-[14px] text-ink-dim">It gets its own page and shows in the shop&apos;s Categories row once a product is in it.</p>
         {error && <p className="text-[15px] font-medium text-ink">{error}</p>}
       </div>
     </Dialog>

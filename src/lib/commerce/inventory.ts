@@ -19,11 +19,13 @@
 
 import {
   CATALOGUE,
+  CATEGORIES,
   LEAGUES,
   PRICES,
   SIZES,
   TEAMS,
   VERSIONS,
+  collectionsOf,
   type CatalogueEntry,
   type Item,
   type Kit,
@@ -68,10 +70,17 @@ export type Entry = {
   deleted?: string;
   /** Set once the editor has touched the photos; until then they come from disk. */
   photos?: StoredPhoto[];
+  /**
+   * Category collections it's listed in ("home-kits", "champions-league",
+   * an editor-made one). Unset: worked out from its type and team, the way
+   * the code list always did.
+   */
+  categories?: string[];
   createdAt?: string;
   updatedAt?: string;
 };
 
+/** A team added in the editor — or a code team moved to another league. */
 export type CustomTeam = { title: string; league: string };
 
 export type Doc = {
@@ -80,12 +89,16 @@ export type Doc = {
   /** By handle. Over a code product: only what changed. A new product: all of it. */
   products: Record<string, Partial<Entry> & { handle: string }>;
   teams: Record<string, CustomTeam>;
+  /** Categories added in the editor, after the code ones. */
+  categories: Record<string, { title: string }>;
+  /** Leagues added in the editor, before National teams. */
+  leagues: Record<string, { title: string }>;
   settings: { printing?: number };
 };
 
 const KEY = "catalogue.json";
 
-const emptyDoc = (): Doc => ({ rev: 0, products: {}, teams: {}, settings: {} });
+const emptyDoc = (): Doc => ({ rev: 0, products: {}, teams: {}, categories: {}, leagues: {}, settings: {} });
 
 function normalise(doc: Partial<Doc> | null): Doc {
   return {
@@ -93,6 +106,8 @@ function normalise(doc: Partial<Doc> | null): Doc {
     updatedAt: doc?.updatedAt,
     products: doc?.products ?? {},
     teams: doc?.teams ?? {},
+    categories: doc?.categories ?? {},
+    leagues: doc?.leagues ?? {},
     settings: doc?.settings ?? {},
   };
 }
@@ -203,17 +218,49 @@ export function teamsOf(doc: Doc): Record<string, string> {
   };
 }
 
+/**
+ * Leagues with their teams, most famous first: the code leagues, the
+ * editor's leagues before National teams, and every team the editor added or
+ * moved placed in its league (at the end of it).
+ */
 export function leaguesOf(doc: Doc) {
-  return LEAGUES.map((league) => ({
-    ...league,
-    teams: [
-      ...(league.teams as string[]),
-      ...Object.entries(doc.teams)
-        .filter(([, t]) => t.league === league.handle)
-        .map(([h]) => h),
-    ],
+  const placed = doc.teams;
+  const base = LEAGUES.map((league) => ({
+    handle: league.handle,
+    title: league.title,
+    nations: league.nations,
+    teams: (league.teams as string[]).filter((h) => !placed[h] || placed[h].league === league.handle),
   }));
+  const added = Object.entries(doc.leagues).map(([handle, l]) => ({
+    handle,
+    title: l.title,
+    nations: undefined as boolean | undefined,
+    teams: [] as string[],
+  }));
+  const all = [...base.filter((l) => !l.nations), ...added, ...base.filter((l) => l.nations)];
+  for (const [team, t] of Object.entries(placed)) {
+    const league = all.find((l) => l.handle === t.league);
+    if (league && !league.teams.includes(team)) league.teams.push(team);
+  }
+  return all;
 }
+
+/** Category handle → name, in rail order: the code ones, then the editor's. */
+export function categoriesOf(doc: Doc): [handle: string, title: string][] {
+  return [...CATEGORIES, ...Object.entries(doc.categories).map(([h, c]) => [h, c.title] as [string, string])];
+}
+
+/** The category collections a product is in — set by hand, or worked out from its type. */
+export function categoriesFor(e: Pick<Entry, "kind" | "kit" | "team" | "ucl" | "categories">): string[] {
+  if (e.categories) return e.categories;
+  return collectionsOf({ kind: e.kind, kit: e.kit, team: e.team, ucl: e.ucl }).filter((h) => h !== e.team);
+}
+
+/** Every collection a product is in: its team, then its categories. */
+export const collectionsFor = (e: Pick<Entry, "kind" | "kit" | "team" | "ucl" | "categories">) => [
+  ...(e.team ? [e.team] : []),
+  ...categoriesFor(e),
+];
 
 export const printingOf = (doc: Doc) => doc.settings.printing ?? PRICES.printing;
 
@@ -264,6 +311,30 @@ export async function takeStock(takes: Take[]): Promise<boolean> {
       const e = entries.get(t.handle);
       if (!e?.stock?.track) continue;
       const qty = { ...e.stock.qty, [t.key]: Math.max(0, (e.stock.qty[t.key] ?? 0) - t.quantity) };
+      const stock: Stock = { track: true, qty };
+      d.products[t.handle] = { ...(d.products[t.handle] ?? { handle: t.handle }), stock };
+      e.stock = stock;
+    }
+  });
+  return true;
+}
+
+/** A cancelled order's counted stock goes back on the shelf. True if anything was counted. */
+export async function returnStock(takes: Pick<Take, "handle" | "key" | "quantity">[]): Promise<boolean> {
+  const doc = await loadDoc();
+  const tracked = new Set(
+    entriesOf(doc)
+      .filter((e) => e.stock?.track)
+      .map((e) => e.handle),
+  );
+  const counted = takes.filter((t) => tracked.has(t.handle));
+  if (!counted.length) return false;
+  await mutate((d) => {
+    const entries = new Map(entriesOf(d).map((e) => [e.handle, e]));
+    for (const t of counted) {
+      const e = entries.get(t.handle);
+      if (!e?.stock?.track) continue;
+      const qty = { ...e.stock.qty, [t.key]: Math.min(9999, (e.stock.qty[t.key] ?? 0) + t.quantity) };
       const stock: Stock = { track: true, qty };
       d.products[t.handle] = { ...(d.products[t.handle] ?? { handle: t.handle }), stock };
       e.stock = stock;

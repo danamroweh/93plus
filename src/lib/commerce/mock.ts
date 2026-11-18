@@ -9,18 +9,18 @@
 
 import { createHash } from "node:crypto";
 import {
-  CATEGORIES,
   CUSTOM,
   PRICES,
   SET_CONTENTS,
   SIZES,
   TRACKSUIT_CONTENTS,
   VERSIONS,
-  collectionsOf,
   shirtPricing,
   type Kit,
 } from "./catalogue";
 import {
+  categoriesOf,
+  collectionsFor,
   entriesOf,
   inStock,
   loadDoc,
@@ -103,7 +103,7 @@ function buildShirt(seed: Entry, printing: number): Product {
     preset,
     presets: seed.presets,
     print: seed.print,
-    collections: collectionsOf(seed),
+    collections: collectionsFor(seed),
   };
 }
 
@@ -131,7 +131,7 @@ function buildPrintable(seed: Entry): Product {
     available,
     category: item,
     customisable: false,
-    collections: collectionsOf(seed),
+    collections: collectionsFor(seed),
   };
 }
 
@@ -159,7 +159,7 @@ function buildShop(doc: Doc) {
     ...Object.entries(teamsOf(doc)).map(([handle, title]) =>
       toCollection(handle, title, "team"),
     ),
-    ...CATEGORIES.map(([handle, title]) => toCollection(handle, title, "category")),
+    ...categoriesOf(doc).map(([handle, title]) => toCollection(handle, title, "category")),
   ].filter((c): c is Collection => c !== null);
 
   const variants = new Map<string, { product: Product; variant: Variant }>();

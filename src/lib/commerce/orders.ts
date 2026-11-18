@@ -1,21 +1,18 @@
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { formatPrice } from "@/lib/utils";
-import { readJSON, writeJSON } from "@/lib/store";
+import { readJSON, update } from "@/lib/store";
+import { stockKey } from "./inventory";
 import type { Cart } from "./types";
 
 /**
  * 93+ · Orders
  *
- * Until Shopify is live, an order is one row in a Google Sheet. The sheet
- * runs a tiny Apps Script web app (scripts/orders-sheet.gs, set up in
- * ORDERS.md) and the site POSTs each order to it.
+ * Every order lives in the shop's own store (`orders.json`, src/lib/store.ts)
+ * and is run from the shop editor's Orders room: its status there is what the
+ * customer's tracking page (/order) shows.
  *
- * Every order is also kept in the shop's own store (`orders/<number>.json`,
- * src/lib/store.ts) — the only copy when no ORDERS_WEBHOOK_URL is set, and a
- * backup when one is. (Orders placed before the store existed are in
- * `orders.jsonl`, which the tracking page still reads.)
+ * A Google Sheet can get a copy of each new order as well (ORDERS_WEBHOOK_URL,
+ * scripts/orders-sheet.gs, ORDERS.md) — handy for a spreadsheet view. The
+ * order still counts as placed only once the store has it.
  */
 
 export type OrderDetails = {
@@ -27,6 +24,26 @@ export type OrderDetails = {
   notes: string;
 };
 
+/** The steps an order walks through, in order. Cancelled can happen at any point. */
+export const ORDER_STEPS = ["New", "Confirmed", "Paid", "Out for delivery", "Delivered"] as const;
+export type OrderState = (typeof ORDER_STEPS)[number] | "Cancelled";
+export const ORDER_STATES: OrderState[] = [...ORDER_STEPS, "Cancelled"];
+
+/** One line of an order, kept whole so the editor can show it and put stock back. */
+export type OrderLine = {
+  handle: string;
+  title: string;
+  /** { Version: "Fan", Size: "M", Customisation: "Name + Number" } */
+  options: Record<string, string>;
+  /** "MESSI 10" */
+  print?: string;
+  quantity: number;
+  /** Each, in cents. */
+  priceCents: number;
+  /** The stock slot it came from ("Fan/M"). */
+  key: string;
+};
+
 export type Order = OrderDetails & {
   number: string;
   placedAt: string;
@@ -35,7 +52,16 @@ export type Order = OrderDetails & {
   delivery: string;
   total: string;
   totalCents: number;
+  lines?: OrderLine[];
+  status?: OrderState;
+  /** When each status was set. */
+  history?: { status: OrderState; at: string }[];
+  /** Counted stock was returned when it was cancelled. */
+  restocked?: boolean;
 };
+
+type OrdersDoc = { orders: Order[] };
+const KEY = "orders.json";
 
 /** "93-1009-4817": prefix, month+day, four random digits. Readable on the phone. */
 function orderNumber(date: Date) {
@@ -46,15 +72,16 @@ function orderNumber(date: Date) {
   return `93-${md}-${tail}`;
 }
 
+const printOf = (a: { name?: string; number?: string }) =>
+  [a.name, a.number].filter(Boolean).join(" ");
+
 /** One line per item — readable in a single spreadsheet cell. */
 function itemsText(cart: Cart) {
   return cart.lines
     .map((line) => {
       const opts =
         Object.values(line.variant.options).join(" · ") || "One size";
-      const print = [line.attributes.name, line.attributes.number]
-        .filter(Boolean)
-        .join(" ");
+      const print = printOf(line.attributes);
       return `${line.quantity}× ${line.product.title} — ${opts}${print ? ` — Print: ${print}` : ""}`;
     })
     .join("\n");
@@ -76,42 +103,70 @@ export function buildOrder(
     delivery: deliveryCents ? formatPrice(deliveryCents) : "Free",
     total: formatPrice(totalCents),
     totalCents,
+    lines: cart.lines.map((line) => ({
+      handle: line.product.handle,
+      title: line.product.title,
+      options: line.variant.options,
+      ...(printOf(line.attributes) && { print: printOf(line.attributes) }),
+      quantity: line.quantity,
+      priceCents: line.variant.price.cents,
+      key: stockKey(line.variant.options),
+    })),
+    status: "New",
+    history: [{ status: "New", at: now.toISOString() }],
   };
 }
 
 export async function recordOrder(order: Order) {
-  const url = process.env.ORDERS_WEBHOOK_URL;
-  const kept = writeJSON(`orders/${order.number}.json`, order);
-
-  if (!url) {
-    await kept;
-    console.warn(`[orders] ORDERS_WEBHOOK_URL not set — ${order.number} kept in the store only`);
-    return;
-  }
-
-  // The sheet is the one that has to work; the store copy is a backup.
-  kept.catch((err) => console.error(`[orders] store copy of ${order.number} failed`, err));
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      secret: process.env.ORDERS_WEBHOOK_SECRET ?? "",
-      order,
-    }),
-    // Apps Script answers with a redirect to the result — follow it.
-    redirect: "follow",
-    cache: "no-store",
-    // A slow sheet must not hold "Place order" forever.
-    signal: AbortSignal.timeout(10_000),
+  // The store is the order book; this is the write that has to land.
+  await update<OrdersDoc>(KEY, (doc) => {
+    const orders = doc?.orders ?? [];
+    // Four random digits a day: a clash is rare, and never overwrites.
+    while (orders.some((o) => o.number === order.number))
+      order.number = `${order.number.slice(0, 8)}${Math.floor(1000 + Math.random() * 9000)}`;
+    return { orders: [order, ...orders] };
   });
 
-  const body = await res.text();
-  if (!res.ok || !body.includes('"ok":true')) {
-    throw new Error(
-      `Order sheet rejected ${order.number}: ${res.status} ${body.slice(0, 200)}`,
-    );
+  const url = process.env.ORDERS_WEBHOOK_URL;
+  if (!url) return;
+  // The sheet is a copy. If it's down, the order is still placed.
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret: process.env.ORDERS_WEBHOOK_SECRET ?? "", order }),
+      // Apps Script answers with a redirect to the result — follow it.
+      redirect: "follow",
+      cache: "no-store",
+      signal: AbortSignal.timeout(8_000),
+    });
+    const body = await res.text();
+    if (!res.ok || !body.includes('"ok":true'))
+      console.error(`[orders] sheet copy of ${order.number} rejected: ${res.status} ${body.slice(0, 200)}`);
+  } catch (err) {
+    console.error(`[orders] sheet copy of ${order.number} failed`, err);
   }
+}
+
+/** Every order, newest first. */
+export async function listOrders(): Promise<Order[]> {
+  const doc = await readJSON<OrdersDoc>(KEY);
+  return [...(doc?.orders ?? [])].sort((a, b) => b.placedAt.localeCompare(a.placedAt));
+}
+
+/** Changes one order with read-change-write safety. Returns it as saved, or null. */
+export async function changeOrder(number: string, change: (o: Order) => void): Promise<Order | null> {
+  let saved: Order | null = null;
+  await update<OrdersDoc>(KEY, (doc) => {
+    const orders = doc?.orders ?? [];
+    const order = orders.find((o) => o.number === number);
+    if (order) {
+      change(order);
+      saved = order;
+    }
+    return { orders };
+  });
+  return saved;
 }
 
 /** What the tracking page shows. Deliberately no name, phone or address. */
@@ -126,63 +181,17 @@ export type OrderStatus = {
 
 /**
  * One order's status, for the person who placed it: the number plus the
- * last four digits of the phone it was placed with. From the sheet when
- * it's connected (`?action=order`, scripts/orders-sheet.gs), otherwise from
- * orders.jsonl, where every order is simply "New".
+ * last four digits of the phone it was placed with.
  */
-export async function lookupOrder(
-  number: string,
-  last4: string,
-): Promise<OrderStatus | null> {
-  const url = process.env.ORDERS_WEBHOOK_URL;
-
-  if (!url) {
-    const kept = await readJSON<Order>(`orders/${number}.json`).catch(() => null);
-    if (kept && kept.phone.replace(/\D/g, "").endsWith(last4))
-      return {
-        number,
-        status: "New",
-        placedAt: kept.placedAt,
-        items: kept.items,
-        total: kept.total,
-        delivery: kept.delivery,
-      };
-    const file = path.join(process.cwd(), "orders.jsonl");
-    if (!existsSync(file)) return null;
-    for (const line of (await readFile(file, "utf8")).split("\n")) {
-      if (!line) continue;
-      try {
-        const o = JSON.parse(line) as Order;
-        if (o.number === number && o.phone.replace(/\D/g, "").endsWith(last4))
-          return {
-            number,
-            status: "New",
-            placedAt: o.placedAt,
-            items: o.items,
-            total: o.total,
-            delivery: o.delivery,
-          };
-      } catch {
-        /* a bad line is skipped */
-      }
-    }
-    return null;
-  }
-
-  const u = new URL(url);
-  u.searchParams.set("action", "order");
-  u.searchParams.set("number", number);
-  u.searchParams.set("phone", last4);
-  u.searchParams.set("secret", process.env.ORDERS_WEBHOOK_SECRET ?? "");
-  try {
-    const res = await fetch(u, {
-      redirect: "follow",
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
-    });
-    const body = (await res.json()) as { ok?: boolean; order?: OrderStatus };
-    return body.ok && body.order ? body.order : null;
-  } catch {
-    return null;
-  }
+export async function lookupOrder(number: string, last4: string): Promise<OrderStatus | null> {
+  const order = (await listOrders().catch(() => [])).find((o) => o.number === number);
+  if (!order || !order.phone.replace(/\D/g, "").endsWith(last4)) return null;
+  return {
+    number,
+    status: order.status ?? "New",
+    placedAt: order.placedAt,
+    items: order.items,
+    total: order.total,
+    delivery: order.delivery,
+  };
 }

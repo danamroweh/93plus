@@ -94,7 +94,8 @@ const RM = "Real Madrid Home 26/27";
   await shop.getByRole("button", { name: /Place order/ }).click();
   await shop.getByText(/93-\d{4}-\d{4}/).first().waitFor({ timeout: 20000 });
   const number = (await shop.getByText(/93-\d{4}-\d{4}/).first().innerText()).match(/93-\d{4}-\d{4}/)[0];
-  log(`order placed → ${number}; kept in store: ${fs.existsSync(path.join(__dirname, "../../.data/orders", number + ".json"))}`);
+  const book = path.join(__dirname, "../../.data/orders.json");
+  log(`order placed → ${number}; in the order book: ${fs.existsSync(book) && fs.readFileSync(book, "utf8").includes(number)}`);
   await shop.goto(base + "/product/real-madrid-home-26-27", { waitUntil: "networkidle" });
   html = await shop.content();
   log(`shop after the order says Sold out: ${/Sold out/.test(html)}`);
@@ -106,6 +107,36 @@ const RM = "Real Madrid Home 26/27";
   await p.getByRole("button", { name: /^Sold out \d/ }).click();
   log(`"Sold out" filter → ${await p.locator("main ul li").count()} product(s)`);
   await p.getByRole("button", { name: /^All \d/ }).click();
+
+  // ── the order in the Orders room: confirm, track, cancel → stock back ──
+  const ordersTab = p.getByRole("navigation", { name: "Rooms" }).getByRole("button", { name: /Orders/ });
+  log(`orders tab says → "${(await ordersTab.innerText()).replace(/\n/g, " ")}"`);
+  await ordersTab.click();
+  const row = p.getByRole("button", { name: new RegExp(`^Order ${number}`) });
+  await row.waitFor();
+  await shot(p, "10-orders-phone");
+  await row.click();
+  await p.getByRole("dialog", { name: `Order ${number}` }).waitFor();
+  await shot(p, "11-order-sheet-phone");
+  await p.getByRole("button", { name: "Mark as confirmed" }).click();
+  log(`confirm → toast "${await p.getByRole("status").innerText()}"`);
+  const track = await ctx.newPage();
+  await track.goto(base + "/order?n=" + number, { waitUntil: "load" });
+  await track.getByPlaceholder("3456").fill("0111");
+  await track.getByRole("button", { name: "Find my order" }).click();
+  await track.waitForTimeout(2000);
+  const tracked = await track.locator("main").innerText();
+  log(`tracking page shows Confirmed as current: ${/CONFIRMED/i.test(tracked)} (order found: ${tracked.includes(number)})`);
+  await track.close();
+  await p.getByRole("button", { name: "Cancel order" }).click();
+  await p.getByRole("alertdialog").getByRole("button", { name: "Cancel order" }).click();
+  await p.getByRole("status").getByText("is cancelled").waitFor();
+  log(`cancelled → sheet says "${(await p.getByRole("dialog", { name: `Order ${number}` }).getByText(/Cancelled/).first().innerText())}"`);
+  await p.keyboard.press("Escape");
+  await p.getByRole("navigation", { name: "Rooms" }).getByRole("button", { name: /Products/ }).click();
+  await p.reload({ waitUntil: "networkidle" });
+  await p.getByRole("heading", { name: "Products" }).waitFor();
+  log(`after cancel the card says → "${(await card.innerText()).replace(/\n/g, " · ")}"`);
 
   // put Real Madrid back as it was: always available, $25
   await card.click();
@@ -127,7 +158,7 @@ const RM = "Real Madrid Home 26/27";
   await p.getByRole("button", { name: "Add a product" }).last().click();
   const sheet = p.getByRole("dialog", { name: "New product" });
   await sheet.waitFor();
-  await sheet.getByRole("button", { name: "Retro", exact: true }).click();
+  await sheet.getByRole("button", { name: "Retro", exact: true }).first().click();
   await sheet.locator("select").first().selectOption("__new");
   await p.getByPlaceholder("Team name — e.g. Napoli").fill("Napoli Test");
   await p.getByRole("alertdialog").locator("select").selectOption("serie-a");
@@ -150,6 +181,38 @@ const RM = "Real Madrid Home 26/27";
   }
   const page = await p.request.get(base + "/product/napoli-test-retro");
   log(`product page /product/napoli-test-retro → ${page.status()}`);
+
+  // ── categories: by hand, a new one; a new league with the team in it ──
+  const napoli = p.getByRole("button", { name: /^Napoli Test Retro,/ }).first();
+  await napoli.click();
+  const ns = p.getByRole("dialog", { name: "Napoli Test Retro" });
+  await ns.getByRole("button", { name: "New category" }).click();
+  await p.getByPlaceholder("e.g. World Cup 2026, Kids, Sale").fill("Test Picks");
+  await p.getByRole("button", { name: "Add category" }).click();
+  await p.getByRole("alertdialog").waitFor({ state: "detached" });
+  await ns.getByRole("button", { name: "Champions League", exact: true }).click();
+  await shot(p, "12-where-it-shows-phone");
+  await ns.getByRole("button", { name: "Save", exact: true }).click();
+  await p.getByRole("status").getByText("Saved. The shop shows it now.").waitFor();
+  for (const c of ["test-picks", "champions-league", "retro"]) {
+    const h = await (await p.request.get(base + "/collection/" + c)).text();
+    log(`/collection/${c} lists Napoli Test Retro: ${h.includes("Napoli Test Retro")}`);
+  }
+  await p.getByRole("button", { name: "More" }).click();
+  await p.getByRole("button", { name: /Categories & leagues/ }).click();
+  const places = p.getByRole("dialog", { name: "Categories & leagues" });
+  await places.getByPlaceholder("New league — e.g. Eredivisie").fill("Test League");
+  await places.getByPlaceholder("New league — e.g. Eredivisie").press("Enter");
+  await p.getByRole("status").getByText("Test League added").waitFor();
+  await places.getByRole("combobox", { name: "League for Napoli Test" }).selectOption({ label: "Test League" });
+  await p.getByRole("status").getByText("Napoli Test is in Test League now.").waitFor();
+  await shot(p, "13-categories-leagues-phone");
+  await p.keyboard.press("Escape");
+  const lg = await p.request.get(base + "/league/test-league");
+  const lgHtml = await lg.text();
+  log(`/league/test-league → ${lg.status()}, lists Napoli Test: ${lgHtml.includes("Napoli Test")}`);
+  const sa = await (await p.request.get(base + "/league/serie-a")).text();
+  log(`/league/serie-a no longer lists Napoli Test: ${!sa.includes("Napoli Test")}`);
 
   // ── hide it ──
   const newCard = p.getByRole("button", { name: /^Napoli Test Retro,/ }).first();

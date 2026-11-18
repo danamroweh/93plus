@@ -10,7 +10,7 @@ allows a shop, it runs Next.js as is, and the editor stores everything in
 |---|---|---|
 | Product changes from the editor | `.data/catalogue.json` | Netlify Blobs, store `93plus` |
 | Photos uploaded in the editor | `.data/media/` | Netlify Blobs |
-| Orders | `.data/orders/` + the Google Sheet if connected | Netlify Blobs + the Google Sheet |
+| Orders (the editor's Orders room) | `.data/orders.json` | Netlify Blobs (+ a copy in the Google Sheet if connected) |
 | Studio photos (`public/product/`) | in the project | deployed with the site |
 
 The two are separate. Edits made in the editor on this Mac stay on this Mac.
@@ -78,3 +78,14 @@ HTTPS turns on by itself once the DNS is seen (minutes to an hour). Then set
 - `npm run build` writes `src/lib/commerce/photo-manifest.json` from
   `public/product/` first, because Netlify's servers can't see `public/`. A new
   studio shoot needs a deploy. A photo uploaded in the editor doesn't.
+
+## Live setup (Nov 18 2026)
+
+- Repo: github.com/danamroweh/93plus (public: Netlify's free plan only builds
+  other people's commits on public repos). hadi-music can push.
+- Netlify: Dana's account, team "93 Plus", project `93plus` →
+  https://93plus.netlify.app. Every push to `main` deploys in about a minute.
+- `ADMIN_PASSWORD` is set in Netlify (Production). New Netlify projects start
+  **private** (only Dana's Netlify login can open them) until "Make public".
+- Netlify Blobs is spoken to directly from `src/lib/store.ts`: the
+  `@netlify/blobs` v11 client hung on every call inside the Next.js server.

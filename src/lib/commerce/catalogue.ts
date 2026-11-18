@@ -200,7 +200,7 @@ export const UCL = { handle: "champions-league", title: "Champions League" } as 
  * Clubs whose whole shirt range sits in the Champions League section (Dana,
  * Oct 18 2026), on top of the single `ucl: true` retros. Tracksuits stay out.
  */
-const UCL_TEAMS: readonly string[] = ["real-madrid", "psg", "arsenal", "bayern-munich", "inter"];
+export const UCL_TEAMS: readonly string[] = ["real-madrid", "psg", "arsenal", "bayern-munich", "inter"];
 
 /**
  * What a shirt order actually is. Every kit ships as a full set — people kept
@@ -1108,7 +1108,7 @@ function printables(
   }));
 }
 
-const KIT_COLLECTION: Record<Kit, string> = {
+export const KIT_COLLECTION: Record<Kit, string> = {
   Home: "home-kits",
   Away: "away-kits",
   Third: "third-kits",

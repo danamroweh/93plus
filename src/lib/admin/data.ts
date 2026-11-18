@@ -1,6 +1,7 @@
-import { LEAGUES, PRICES, TEAM_ALIASES, type Item, type Kit } from "@/lib/commerce/catalogue";
+import { CATEGORIES, KIT_COLLECTION, PRICES, TEAM_ALIASES, UCL, UCL_TEAMS, type Item, type Kit } from "@/lib/commerce/catalogue";
 import {
   CODE_HANDLES,
+  categoriesOf,
   entriesOf,
   hasVersions,
   leaguesOf,
@@ -11,6 +12,7 @@ import {
   type Entry,
 } from "@/lib/commerce/inventory";
 import { editorPhotos } from "@/lib/commerce/photos";
+import { listOrders } from "@/lib/commerce/orders";
 import { storeKind } from "@/lib/store";
 import type { AdminProduct, AdminSnapshot } from "./types";
 
@@ -60,6 +62,8 @@ export function toAdmin(e: Entry): AdminProduct {
       preview,
       ...(blur && { blur }),
     })),
+    categories: e.categories ?? null,
+    ucl: Boolean(e.ucl),
     createdAt: e.createdAt ?? null,
     fromCode: CODE_HANDLES.has(e.handle),
   };
@@ -72,7 +76,9 @@ export function currentSeason(now = new Date()) {
   return `${String(start).padStart(2, "0")}/${String((start + 1) % 100).padStart(2, "0")}`;
 }
 
-export function snapshotOf(doc: Doc): AdminSnapshot {
+const CODE_CATEGORIES = new Set(CATEGORIES.map(([h]) => h));
+
+export function snapshotOf(doc: Doc, orders: AdminSnapshot["orders"]): AdminSnapshot {
   const names = teamsOf(doc);
   const leagues = leaguesOf(doc);
   return {
@@ -83,7 +89,10 @@ export function snapshotOf(doc: Doc): AdminSnapshot {
       league: leagues.find((l) => l.teams.includes(handle))?.handle ?? null,
       aliases: (TEAM_ALIASES as Record<string, string[]>)[handle] ?? [],
     })),
-    leagues: LEAGUES.map(({ handle, title }) => ({ handle, title })),
+    leagues: leagues.map(({ handle, title }) => ({ handle, title, custom: handle in doc.leagues })),
+    categories: categoriesOf(doc).map(([handle, title]) => ({ handle, title, custom: !CODE_CATEGORIES.has(handle) })),
+    rules: { kitCategory: KIT_COLLECTION, uclTeams: [...UCL_TEAMS], ucl: UCL.handle },
+    orders,
     printing: printingOf(doc),
     season: currentSeason(),
     defaults: DEFAULT_PRICES,
@@ -92,5 +101,6 @@ export function snapshotOf(doc: Doc): AdminSnapshot {
 }
 
 export async function snapshot() {
-  return snapshotOf(await loadDoc());
+  const [doc, orders] = await Promise.all([loadDoc(), listOrders().catch(() => [])]);
+  return snapshotOf(doc, orders);
 }

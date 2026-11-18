@@ -36,6 +36,8 @@ import {
   type ToastState,
 } from "./parts";
 import { ProductSheet } from "./ProductSheet";
+import { OrdersRoom } from "./OrdersRoom";
+import { PlacesRoom } from "./PlacesRoom";
 
 type Filter = "all" | "shirts" | "retro" | "long" | "tracksuits" | "accessories" | "hidden" | "soldout";
 
@@ -68,8 +70,24 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [open, setOpen] = useState<string | "new" | null>(null);
-  const [room, setRoom] = useState<null | "deleted" | "settings">(null);
+  const [room, setRoom] = useState<null | "deleted" | "settings" | "places">(null);
   const [toast, setToast] = useState<ToastState>(null);
+  // Products or Orders — remembered in the address (#orders), so a reload
+  // or a bookmark lands back in the same room.
+  const [tab, setTab] = useState<"products" | "orders">("products");
+  useEffect(() => {
+    const sync = () => setTab(window.location.hash === "#orders" ? "orders" : "products");
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  const go = (t: "products" | "orders") => {
+    setTab(t);
+    history.replaceState(null, "", t === "orders" ? "#orders" : window.location.pathname);
+    document.querySelector("[data-admin]")?.scrollTo({ top: 0 });
+  };
+  const newOrders = data.orders.filter((o) => (o.status ?? "New") === "New").length;
+  const setOrders = useCallback((orders: AdminSnapshot["orders"]) => setData((d) => ({ ...d, orders })), []);
 
   const live = useMemo(() => data.products.filter((p) => !p.deleted), [data.products]);
   const deleted = useMemo(
@@ -130,8 +148,34 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
     <div className="min-h-full pb-32">
       <header className="sticky top-0 z-20 border-b border-hairline bg-ground/95 backdrop-blur-sm">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-3 px-4 lg:px-8">
-          <Logo className="w-11 text-ink" />
-          <span className="text-[13px] font-medium uppercase tracking-[0.06em] text-ink-dim">Shop editor</span>
+          <Logo className="w-11 shrink-0 text-ink" />
+          <span className="hidden text-[13px] font-medium uppercase tracking-[0.06em] text-ink-dim lg:inline">Shop editor</span>
+          <nav aria-label="Rooms" className="ml-1 flex h-11 border border-ink/25 bg-surface sm:ml-4">
+            {(["products", "orders"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                aria-current={tab === t ? "page" : undefined}
+                onClick={() => go(t)}
+                className={cn(
+                  "flex items-center gap-2 px-4 text-[15px] font-medium transition-colors sm:px-5",
+                  tab === t ? "bg-ink text-ground" : "text-ink hover:bg-ink/[0.06]",
+                )}
+              >
+                {t === "products" ? "Products" : "Orders"}
+                {t === "orders" && newOrders > 0 && (
+                  <span
+                    className={cn(
+                      "flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[13px] tabular-nums",
+                      tab === t ? "bg-ground text-ink" : "bg-ink text-ground",
+                    )}
+                  >
+                    {newOrders}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
           <div className="ml-auto flex items-center gap-1">
             <a
               href="/"
@@ -144,6 +188,7 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
             <Menu
               items={[
                 { label: "Open the shop", icon: <IconOut />, href: "/" },
+                { label: "Categories & leagues", icon: <IconPlus />, onClick: () => setRoom("places") },
                 {
                   label: "Deleted products",
                   icon: <IconTrash />,
@@ -165,6 +210,9 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
         </div>
       </header>
 
+      {tab === "orders" ? (
+        <OrdersRoom orders={data.orders} onOrders={setOrders} onToast={setToast} />
+      ) : (
       <main className="mx-auto max-w-[1440px] px-4 pt-8 lg:px-8 lg:pt-12">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -249,13 +297,16 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
           </div>
         )}
       </main>
+      )}
 
       {/* On a phone the add button sits where the thumb is. */}
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-hairline bg-ground/95 p-3 backdrop-blur-sm sm:hidden">
-        <Button tone="primary" size="lg" className="w-full" onClick={() => setOpen("new")}>
-          <IconPlus /> Add a product
-        </Button>
-      </div>
+      {tab === "products" && (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-hairline bg-ground/95 p-3 backdrop-blur-sm sm:hidden">
+          <Button tone="primary" size="lg" className="w-full" onClick={() => setOpen("new")}>
+            <IconPlus /> Add a product
+          </Button>
+        </div>
+      )}
 
       {open && (
         <ProductSheet
@@ -283,6 +334,7 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
             setToast({ text: `${p.title} is deleted.`, action: { label: "Undo", run: () => void restore(p) } });
           }}
           onTeamAdded={(team) => setData((d) => ({ ...d, teams: [...d.teams, team] }))}
+          onCategoryAdded={(category) => setData((d) => ({ ...d, categories: [...d.categories, category] }))}
         />
       )}
 
@@ -301,6 +353,10 @@ export function Editor({ initial }: { initial: AdminSnapshot }) {
             )}
           </div>
         </Sheet>
+      )}
+
+      {room === "places" && (
+        <PlacesRoom data={data} onData={setData} onClose={() => setRoom(null)} onToast={setToast} />
       )}
 
       {room === "settings" && (
